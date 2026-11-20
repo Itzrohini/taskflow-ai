@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings
+from app.db.mongo import get_database
+from app.main import create_app
 
 
 def test_health_check(client: TestClient):
@@ -9,27 +10,30 @@ def test_health_check(client: TestClient):
     assert response.json() == {"status": "ok"}
 
 
-def test_settings_load_without_env(monkeypatch):
-    for key in [
-        "APP_ENV",
-        "CORS_ORIGINS",
-        "SUPABASE_URL",
-        "SUPABASE_ANON_KEY",
-        "SUPABASE_JWT_SECRET",
-        "GEMINI_API_KEY",
-        "GEMINI_MODEL",
-        "AI_TIMEOUT_SECONDS",
-        "AI_RATE_LIMIT_PER_HOUR",
-    ]:
-        monkeypatch.delenv(key, raising=False)
+def test_health_db_returns_503_when_no_database_configured(client: TestClient):
+    response = client.get("/health/db")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database is unavailable"}
 
-    settings = Settings(_env_file=None)
-    assert settings.APP_ENV == "development"
-    assert settings.CORS_ORIGINS == ["http://localhost:3000"]
-    assert settings.SUPABASE_URL is None
-    assert settings.SUPABASE_ANON_KEY is None
-    assert settings.SUPABASE_JWT_SECRET is None
-    assert settings.GEMINI_API_KEY is None
-    assert settings.GEMINI_MODEL == "gemini-2.5-flash"
-    assert settings.AI_TIMEOUT_SECONDS == 20
-    assert settings.AI_RATE_LIMIT_PER_HOUR == 30
+
+def test_health_db_returns_200_when_get_database_overridden(mock_db):
+    app = create_app()
+    app.dependency_overrides[get_database] = lambda: mock_db
+    with TestClient(app) as test_client:
+        response = test_client.get("/health/db")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "database": "taskflow"}
+
+
+def test_health_db_returns_503_when_ping_fails(mock_db, monkeypatch):
+    def failing_ping(*args, **kwargs):
+        raise ConnectionError("Server unavailable")
+
+    monkeypatch.setattr(mock_db.client.admin, "command", failing_ping)
+
+    app = create_app()
+    app.dependency_overrides[get_database] = lambda: mock_db
+    with TestClient(app) as test_client:
+        response = test_client.get("/health/db")
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Database is unreachable"}

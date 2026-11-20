@@ -8,9 +8,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     APP_ENV: str = "development"
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
-    SUPABASE_URL: str | None = None
-    SUPABASE_ANON_KEY: str | None = None
-    SUPABASE_JWT_SECRET: str | None = None
+    MONGODB_URI: str = ""
+    MONGODB_DB_NAME: str = "taskflow"
+    MONGODB_TIMEOUT_MS: int = 5000
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
     AI_TIMEOUT_SECONDS: int = 20

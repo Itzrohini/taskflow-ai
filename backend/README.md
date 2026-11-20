@@ -72,6 +72,37 @@ The test is skipped when `MONGODB_URI` is empty.
 
 ---
 
+## AI Suggestions
+
+The stateless endpoints are:
+
+- `POST /api/v1/ai/breakdown` suggests 3-8 ordered subtasks for a task.
+- `POST /api/v1/ai/improve` suggests clearer task text, priority, and a due date
+  only when one is supported by the supplied text.
+- `POST /api/v1/ai/plan` uses pending tasks and an available-minutes budget to
+  suggest a plan and postponed work.
+
+They return suggestions only; they never save or modify tasks. Users save
+accepted suggestions through the existing task CRUD endpoints. AI failures do
+not affect CRUD availability.
+
+Configure these environment variables:
+
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL`
+- `AI_TIMEOUT_SECONDS`
+- `AI_RATE_LIMIT_PER_HOUR`
+
+The in-memory rate limit is per process and resets when the process restarts.
+
+If an AI endpoint returns `ai_provider_error`, check the backend log for the
+sanitized Gemini HTTP status. Verify that the configured model supports content
+generation and that the API key's Google AI project can generate content. The
+backend intentionally does not log or return provider response bodies, prompts,
+or credentials.
+
+---
+
 ## Code Quality & Linting
 ```bash
 ruff check .

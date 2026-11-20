@@ -11,10 +11,10 @@ class Settings(BaseSettings):
     MONGODB_URI: str = ""
     MONGODB_DB_NAME: str = "taskflow"
     MONGODB_TIMEOUT_MS: int = 5000
-    GEMINI_API_KEY: str | None = None
+    GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     AI_TIMEOUT_SECONDS: int = 20
-    AI_RATE_LIMIT_PER_HOUR: int = 30
+    AI_RATE_LIMIT_PER_HOUR: int = 100
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

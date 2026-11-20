@@ -31,10 +31,10 @@ def test_settings_load_without_env(monkeypatch):
     assert settings.MONGODB_URI == ""
     assert settings.MONGODB_DB_NAME == "taskflow"
     assert settings.MONGODB_TIMEOUT_MS == 5000
-    assert settings.GEMINI_API_KEY is None
+    assert settings.GEMINI_API_KEY == ""
     assert settings.GEMINI_MODEL == "gemini-2.5-flash"
     assert settings.AI_TIMEOUT_SECONDS == 20
-    assert settings.AI_RATE_LIMIT_PER_HOUR == 30
+    assert settings.AI_RATE_LIMIT_PER_HOUR == 100
 
 
 def test_ensure_indexes_creates_named_indexes_and_is_idempotent():

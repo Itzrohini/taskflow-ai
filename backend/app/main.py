@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import PyMongoError
 
+from app.ai.errors import AIError, ai_exception_handler
+from app.api.v1.ai import router as ai_router
 from app.api.v1.health import router as health_router
 from app.api.v1.tasks import router as tasks_router
 from app.core.config import get_settings
@@ -80,12 +82,18 @@ def create_app() -> FastAPI:
         database_unavailable_exception_handler,
     )
     app.add_exception_handler(NotFoundError, not_found_exception_handler)
+    app.add_exception_handler(AIError, ai_exception_handler)
 
     app.include_router(health_router, prefix="/health", tags=["health"])
     app.include_router(
         tasks_router,
         prefix="/api/v1/tasks",
         tags=["tasks"],
+    )
+    app.include_router(
+        ai_router,
+        prefix="/api/v1/ai",
+        tags=["ai"],
     )
 
     return app

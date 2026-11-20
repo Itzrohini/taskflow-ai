@@ -85,3 +85,56 @@ export interface SubtaskUpdateInput {
   description?: string | null;
   completed?: boolean;
 }
+
+export interface AiBreakdownRequest {
+  title: string;
+  description?: string | null;
+}
+
+export interface AiBreakdownResponse {
+  subtasks: Array<{
+    title: string;
+    description: string | null;
+  }>;
+}
+
+export interface AiImproveRequest {
+  title: string;
+  description?: string | null;
+  today?: string;
+}
+
+export interface AiImproveResponse {
+  title: string;
+  description: string | null;
+  priority: Priority;
+  due_date: string | null;
+}
+
+export interface AiPlanRequest {
+  available_minutes: number;
+  today?: string;
+}
+
+export interface AiPlannedTask {
+  task_id: string;
+  title: string;
+  priority: Priority;
+  due_date: string | null;
+  minutes: number;
+  reason: string;
+}
+
+export interface AiPostponedTask {
+  task_id: string;
+  title: string;
+  reason: string;
+}
+
+export interface AiPlanResponse {
+  summary: string;
+  plan: AiPlannedTask[];
+  postponed: AiPostponedTask[];
+  warnings: string[];
+  total_minutes: number;
+}

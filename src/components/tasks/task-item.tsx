@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
+import { BreakdownDialog } from "@/components/ai/breakdown-dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -133,9 +134,13 @@ export function TaskItem({
           </div>
 
           <div
+            role="group"
             aria-label="Task actions"
             className="flex shrink-0 items-center gap-0.5 border-l border-slate-100 pl-2"
           >
+            {!task.completed && (
+              <BreakdownDialog task={task} onAdd={onAddSubtasks} />
+            )}
             <TaskEditDialog task={task} onSave={onSave} />
             <AlertDialog>
               <AlertDialogTrigger asChild>

@@ -58,6 +58,7 @@ function errorMessage(error: unknown): string {
 
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskById, setTaskById] = useState<Record<string, Task>>({});
   const [stats, setStats] = useState<Stats | null>(null);
   const [filters, setFiltersState] = useState<TaskFilters>(INITIAL_FILTERS);
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -65,6 +66,13 @@ export function useTasks() {
   const [error, setError] = useState<LoadError | null>(null);
   const requestId = useRef(0);
   const today = localToday();
+
+  const rememberTasks = useCallback((items: Task[]) => {
+    setTaskById((current) => ({
+      ...current,
+      ...Object.fromEntries(items.map((task) => [task.id, task])),
+    }));
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(
@@ -100,6 +108,7 @@ export function useTasks() {
       .then(([taskResponse, statsResponse]) => {
         if (active && currentRequestId === requestId.current) {
           setTasks(taskResponse.items);
+          rememberTasks(taskResponse.items);
           setStats(statsResponse);
           setError(null);
         }
@@ -121,7 +130,7 @@ export function useTasks() {
       active = false;
       requestId.current += 1;
     };
-  }, [fetchData]);
+  }, [fetchData, rememberTasks]);
 
   const loadData = useCallback(
     async (showLoading = false) => {
@@ -133,6 +142,7 @@ export function useTasks() {
         const [taskResponse, statsResponse] = await fetchData();
         if (currentRequestId === requestId.current) {
           setTasks(taskResponse.items);
+          rememberTasks(taskResponse.items);
           setStats(statsResponse);
         }
       } catch (loadError) {
@@ -148,7 +158,7 @@ export function useTasks() {
         }
       }
     },
-    [fetchData],
+    [fetchData, rememberTasks],
   );
 
   const updateFilters = useCallback((patch: Partial<TaskFilters>) => {
@@ -164,6 +174,7 @@ export function useTasks() {
   const refreshAfterMutation = useCallback(
     async (updatedTask?: Task) => {
       if (updatedTask) {
+        rememberTasks([updatedTask]);
         setTasks((current) => [
           updatedTask,
           ...current.filter((task) => task.id !== updatedTask.id),
@@ -171,13 +182,14 @@ export function useTasks() {
       }
       await loadData(false);
     },
-    [loadData],
+    [loadData, rememberTasks],
   );
 
   const createTask = useCallback(
     async (input: TaskCreateInput): Promise<boolean> => {
       try {
         const created = await createTaskRequest(input);
+        rememberTasks([created]);
         setTasks((current) => [created, ...current]);
         toast.success("Task added");
         await refreshAfterMutation();
@@ -187,7 +199,7 @@ export function useTasks() {
         return false;
       }
     },
-    [refreshAfterMutation],
+    [refreshAfterMutation, rememberTasks],
   );
 
   const toggleTask = useCallback(
@@ -199,6 +211,10 @@ export function useTasks() {
       setTasks((current) =>
         current.map((task) => (task.id === taskId ? { ...task, completed } : task)),
       );
+      setTaskById((current) => ({
+        ...current,
+        [taskId]: { ...previous, completed },
+      }));
       try {
         const updated = await updateTaskRequest(taskId, { completed });
         toast.success(completed ? "Task completed" : "Task reopened");
@@ -208,6 +224,7 @@ export function useTasks() {
         setTasks((current) =>
           current.map((task) => (task.id === taskId ? previous : task)),
         );
+        setTaskById((current) => ({ ...current, [taskId]: previous }));
         toast.error(errorMessage(mutationError));
         return false;
       }
@@ -235,6 +252,11 @@ export function useTasks() {
       try {
         await deleteTaskRequest(taskId);
         setTasks((current) => current.filter((task) => task.id !== taskId));
+        setTaskById((current) => {
+          const next = { ...current };
+          delete next[taskId];
+          return next;
+        });
         toast.success("Task deleted");
         await loadData(false);
         return true;
@@ -310,6 +332,7 @@ export function useTasks() {
 
   return {
     tasks,
+    taskById,
     stats,
     filters,
     updateFilters,

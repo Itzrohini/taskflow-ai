@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { Plus } from "lucide-react";
+import { ImproveDialog } from "@/components/ai/improve-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -25,6 +26,12 @@ export function QuickAdd({ onAdd }: QuickAddProps) {
   const [submitting, setSubmitting] = useState(false);
   const [validationError, setValidationError] = useState("");
 
+  function clearForm() {
+    setTitle("");
+    setPriority("medium");
+    setDueDate("");
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const cleanTitle = title.trim();
@@ -45,11 +52,18 @@ export function QuickAdd({ onAdd }: QuickAddProps) {
       due_date: dueDate || null,
     });
     if (saved) {
-      setTitle("");
-      setPriority("medium");
-      setDueDate("");
+      clearForm();
     }
     setSubmitting(false);
+  }
+
+  async function createSuggestion(
+    input: TaskCreateInput,
+    originalTitle: string,
+  ) {
+    const saved = await onAdd(input);
+    if (saved && title.trim() === originalTitle) clearForm();
+    return saved;
   }
 
   return (
@@ -126,6 +140,11 @@ export function QuickAdd({ onAdd }: QuickAddProps) {
           <Plus aria-hidden="true" className="size-4" />
           {submitting ? "Adding…" : "Add"}
         </Button>
+        <ImproveDialog
+          title={title}
+          disabled={submitting}
+          onCreate={createSuggestion}
+        />
       </div>
     </form>
   );

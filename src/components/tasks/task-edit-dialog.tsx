@@ -1,64 +1,99 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Pencil } from "lucide-react";
+import { TaskEditForm, type EditFields } from "@/components/tasks/task-edit-form";
+import type { ImproveSource } from "@/components/ai/improve-action";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { isPriority } from "@/lib/api";
-import type { Priority, Task, TaskUpdateInput } from "@/lib/types";
+import type { AiImproveResponse, Task, TaskUpdateInput } from "@/lib/types";
 
 interface TaskEditDialogProps {
   task: Task;
   onSave: (taskId: string, input: TaskUpdateInput) => Promise<boolean>;
 }
 
+function fieldsFromTask(task: Task): EditFields {
+  return {
+    title: task.title,
+    description: task.description ?? "",
+    priority: task.priority,
+    dueDate: task.due_date ?? "",
+  };
+}
+
 export function TaskEditDialog({ task, onSave }: TaskEditDialogProps) {
   const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description ?? "");
-  const [priority, setPriority] = useState<Priority>(task.priority);
-  const [dueDate, setDueDate] = useState(task.due_date ?? "");
+  const [fields, setFields] = useState<EditFields>(() => fieldsFromTask(task));
+  const fieldsRef = useRef(fields);
   const [duration, setDuration] = useState(
     task.estimated_duration?.toString() ?? "",
   );
   const [saving, setSaving] = useState(false);
   const [validationError, setValidationError] = useState("");
+  const [undoFields, setUndoFields] = useState<EditFields | null>(null);
+  const [aiApplied, setAiApplied] = useState(false);
 
   function handleOpenChange(nextOpen: boolean) {
     if (nextOpen) {
-      setTitle(task.title);
-      setDescription(task.description ?? "");
-      setPriority(task.priority);
-      setDueDate(task.due_date ?? "");
+      const currentFields = fieldsFromTask(task);
+      fieldsRef.current = currentFields;
+      setFields(currentFields);
       setDuration(task.estimated_duration?.toString() ?? "");
       setValidationError("");
+      setUndoFields(null);
+      setAiApplied(false);
     }
     setOpen(nextOpen);
   }
 
+  function applySuggestion(
+    suggestion: AiImproveResponse,
+    source: ImproveSource,
+  ) {
+    const previous = fieldsRef.current;
+    setUndoFields(previous);
+    const updated: EditFields = {
+      title:
+        previous.title === source.title ? suggestion.title : previous.title,
+      description:
+        previous.description === source.description
+          ? suggestion.description ?? ""
+          : previous.description,
+      priority:
+        previous.priority === source.priority
+          ? suggestion.priority
+          : previous.priority,
+      dueDate:
+        previous.dueDate === source.dueDate
+          ? suggestion.due_date ?? ""
+          : previous.dueDate,
+    };
+    fieldsRef.current = updated;
+    setFields(updated);
+    setAiApplied(true);
+  }
+
+  function undoSuggestion() {
+    if (!undoFields) return;
+    fieldsRef.current = undoFields;
+    setFields(undoFields);
+    setUndoFields(null);
+    setAiApplied(false);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const cleanTitle = title.trim();
+    const title = fields.title.trim();
     const numericDuration = duration.trim() ? Number(duration) : null;
-    if (!cleanTitle || cleanTitle.length > 200) {
+    if (!title || title.length > 200) {
       setValidationError("Enter a title between 1 and 200 characters.");
       return;
     }
@@ -68,17 +103,19 @@ export function TaskEditDialog({ task, onSave }: TaskEditDialogProps) {
         numericDuration < 1 ||
         numericDuration > 1440)
     ) {
-      setValidationError("Duration must be a whole number from 1 to 1440 minutes.");
+      setValidationError(
+        "Duration must be a whole number from 1 to 1440 minutes.",
+      );
       return;
     }
 
     setSaving(true);
     setValidationError("");
     const saved = await onSave(task.id, {
-      title: cleanTitle,
-      description: description.trim() || null,
-      priority,
-      due_date: dueDate || null,
+      title,
+      description: fields.description.trim() || null,
+      priority: fields.priority,
+      due_date: fields.dueDate || null,
       estimated_duration: numericDuration,
     });
     setSaving(false);
@@ -103,91 +140,25 @@ export function TaskEditDialog({ task, onSave }: TaskEditDialogProps) {
           <DialogTitle>Edit task</DialogTitle>
           <DialogDescription>Update the details for this task.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label htmlFor={`edit-title-${task.id}`} className="text-sm font-medium">
-              Title
-            </label>
-            <Input
-              id={`edit-title-${task.id}`}
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              maxLength={200}
-              required
-              autoFocus
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor={`edit-description-${task.id}`} className="text-sm font-medium">
-              Description
-            </label>
-            <Textarea
-              id={`edit-description-${task.id}`}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              maxLength={2000}
-              rows={3}
-              placeholder="Add a little more context…"
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <label className="space-y-1.5 text-sm font-medium">
-              Priority
-              <Select
-                value={priority}
-                onValueChange={(value) => {
-                  if (value && isPriority(value)) setPriority(value);
-                }}
-              >
-                <SelectTrigger className="h-10 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Low</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="space-y-1.5 text-sm font-medium">
-              Due date
-              <Input
-                type="date"
-                value={dueDate}
-                onChange={(event) => setDueDate(event.target.value)}
-                className="h-10"
-              />
-            </label>
-            <label className="space-y-1.5 text-sm font-medium">
-              Minutes
-              <Input
-                type="number"
-                min={1}
-                max={1440}
-                step={1}
-                value={duration}
-                onChange={(event) => setDuration(event.target.value)}
-                placeholder="Optional"
-                className="h-10"
-              />
-            </label>
-          </div>
-          {validationError && (
-            <p role="alert" className="text-sm text-red-600">
-              {validationError}
-            </p>
-          )}
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline" disabled={saving}>
-                Cancel
-              </Button>
-            </DialogClose>
-            <Button type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save changes"}
-            </Button>
-          </DialogFooter>
-        </form>
+        {open && (
+          <TaskEditForm
+            taskId={task.id}
+            fields={fields}
+            duration={duration}
+            saving={saving}
+            validationError={validationError}
+            aiApplied={aiApplied}
+            onChange={(patch) => {
+              const updated = { ...fieldsRef.current, ...patch };
+              fieldsRef.current = updated;
+              setFields(updated);
+            }}
+            onDurationChange={setDuration}
+            onSubmit={handleSubmit}
+            onSuggestion={applySuggestion}
+            onUndo={undoSuggestion}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );

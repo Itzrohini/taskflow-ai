@@ -1,5 +1,11 @@
 import type {
   Priority,
+  AiBreakdownRequest,
+  AiBreakdownResponse,
+  AiImproveRequest,
+  AiImproveResponse,
+  AiPlanRequest,
+  AiPlanResponse,
   Stats,
   SubtaskInput,
   SubtaskUpdateInput,
@@ -14,32 +20,54 @@ const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"
 ).replace(/\/+$/, "");
 const REQUEST_TIMEOUT_MS = 15_000;
+const AI_REQUEST_TIMEOUT_MS = 30_000;
+
+interface RequestOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
 
 export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
 
-function isDetailResponse(value: unknown): value is { detail: string } {
+function isApiErrorResponse(
+  value: unknown,
+): value is { detail: string; code?: string } {
   return (
     typeof value === "object" &&
     value !== null &&
     "detail" in value &&
-    typeof value.detail === "string"
+    typeof value.detail === "string" &&
+    (!("code" in value) || typeof value.code === "string")
   );
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  options: RequestOptions = {},
+): Promise<T> {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(
-    () => controller.abort(),
-    REQUEST_TIMEOUT_MS,
-  );
+  const callerSignal = options.signal ?? init.signal ?? undefined;
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  if (callerSignal?.aborted) {
+    controller.abort();
+  } else {
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body) {
@@ -47,14 +75,25 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   let response: Response;
+  let data: unknown;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
       headers,
       signal: controller.signal,
     });
+    if (response.status !== 204) {
+      try {
+        data = await response.json();
+      } catch {
+        data = undefined;
+      }
+    }
   } catch {
-    if (controller.signal.aborted) {
+    if (callerSignal?.aborted) {
+      throw new ApiError("The request was cancelled.", 0);
+    }
+    if (timedOut) {
       throw new ApiError("The request timed out. Please try again.", 0);
     }
     throw new ApiError(
@@ -63,24 +102,20 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     );
   } finally {
     window.clearTimeout(timeoutId);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
   }
 
   if (response.status === 204) {
     return undefined as T;
   }
 
-  let data: unknown;
-  try {
-    data = await response.json();
-  } catch {
-    data = undefined;
-  }
-
   if (!response.ok) {
-    const message = isDetailResponse(data)
-      ? data.detail
-      : `The request failed (${response.status}).`;
-    throw new ApiError(message, response.status);
+    const body = isApiErrorResponse(data) ? data : undefined;
+    throw new ApiError(
+      body?.detail ?? `The request failed (${response.status}).`,
+      response.status,
+      body?.code,
+    );
   }
 
   if (data === undefined) {
@@ -171,6 +206,39 @@ export function deleteSubtask(
   return request<Task>(
     `/api/v1/tasks/${encodeURIComponent(taskId)}/subtasks/${encodeURIComponent(subtaskId)}`,
     { method: "DELETE" },
+  );
+}
+
+export function aiBreakdown(
+  input: AiBreakdownRequest,
+  signal?: AbortSignal,
+): Promise<AiBreakdownResponse> {
+  return request<AiBreakdownResponse>(
+    "/api/v1/ai/breakdown",
+    { method: "POST", body: JSON.stringify(input) },
+    { timeoutMs: AI_REQUEST_TIMEOUT_MS, signal },
+  );
+}
+
+export function aiImprove(
+  input: AiImproveRequest,
+  signal?: AbortSignal,
+): Promise<AiImproveResponse> {
+  return request<AiImproveResponse>(
+    "/api/v1/ai/improve",
+    { method: "POST", body: JSON.stringify(input) },
+    { timeoutMs: AI_REQUEST_TIMEOUT_MS, signal },
+  );
+}
+
+export function aiPlan(
+  input: AiPlanRequest,
+  signal?: AbortSignal,
+): Promise<AiPlanResponse> {
+  return request<AiPlanResponse>(
+    "/api/v1/ai/plan",
+    { method: "POST", body: JSON.stringify(input) },
+    { timeoutMs: AI_REQUEST_TIMEOUT_MS, signal },
   );
 }
 

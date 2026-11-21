@@ -2,6 +2,7 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from pymongo.errors import ServerSelectionTimeoutError
 
 TASKS_URL = "/api/v1/tasks/"
 TODAY = "2026-11-20"
@@ -317,3 +318,19 @@ def test_task_routes_return_503_when_database_unavailable(client: TestClient):
     response = client.get(TASKS_URL)
     assert response.status_code == 503
     assert response.json() == {"detail": "Database is unavailable"}
+
+
+def test_task_route_maps_pymongo_connection_failure_to_503(
+    task_client: TestClient,
+    mock_db,
+):
+    def fail_connection(*args, **kwargs):
+        raise ServerSelectionTimeoutError("SSL handshake failed")
+
+    mock_db.tasks.count_documents = fail_connection
+
+    response = task_client.get(TASKS_URL)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database is unavailable"}
+

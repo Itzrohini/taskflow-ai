@@ -1,5 +1,6 @@
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
+from pymongo.errors import PyMongoError
 
 
 class DatabaseUnavailableError(Exception):
@@ -33,4 +34,13 @@ async def not_found_exception_handler(
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
         content={"detail": exc.message},
+    )
+
+
+async def pymongo_exception_handler(
+    request: Request, exc: PyMongoError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "Database is unavailable"},
     )

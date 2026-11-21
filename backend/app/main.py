@@ -15,6 +15,7 @@ from app.core.errors import (
     NotFoundError,
     database_unavailable_exception_handler,
     not_found_exception_handler,
+    pymongo_exception_handler,
 )
 from app.db.indexes import ensure_indexes
 from app.db.mongo import create_client
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
         database_unavailable_exception_handler,
     )
     app.add_exception_handler(NotFoundError, not_found_exception_handler)
+    app.add_exception_handler(PyMongoError, pymongo_exception_handler)
     app.add_exception_handler(AIError, ai_exception_handler)
 
     app.include_router(health_router, prefix="/health", tags=["health"])

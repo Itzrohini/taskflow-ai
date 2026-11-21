@@ -1,19 +1,20 @@
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 from app.ai.schemas.common import (
     AIOutputModel,
     Description,
-    Title,
     normalize_description,
     strip_title,
 )
 
+ImproveTitle = Annotated[str, Field(min_length=1, max_length=80)]
+
 
 class ImprovedTask(AIOutputModel):
-    title: Title
+    title: ImproveTitle
     description: Description
     priority: Literal["low", "medium", "high"]
     due_date: date | None

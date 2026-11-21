@@ -1,6 +1,9 @@
 import json
 from datetime import date
 
+import pytest
+
+from app.ai.errors import AIInvalidOutputError
 from app.ai.prompts import breakdown, improve, plan
 from app.ai.services.breakdown_service import break_down_task
 from app.ai.services.improve_service import improve_task
@@ -37,6 +40,17 @@ def _postponed_item(task_id, title="AI supplied postponed title"):
     return {"task_id": task_id, "title": title, "reason": "Lower priority."}
 
 
+def _improve_output(title, description=None, due_date=None):
+    return json.dumps(
+        {
+            "title": title,
+            "description": description,
+            "priority": "medium",
+            "due_date": due_date,
+        }
+    )
+
+
 def _pending_task(task_id, title, *, priority="medium", due_date=None, duration=30):
     return {
         "id": task_id,
@@ -58,6 +72,18 @@ def test_prompts_wrap_untrusted_text_and_include_date_and_budget():
     improve_prompt = improve.build_prompt("title", None, TODAY)
     assert "today: 2026-11-20" in improve_prompt
     assert "<task>" in improve_prompt
+    assert "verb-first action" in improve.SYSTEM
+    assert "at most 80 characters" in improve.SYSTEM
+    assert "non-null description" in improve.SYSTEM
+    assert "Never invent names, numbers, tools, dates" in " ".join(
+        improve.SYSTEM.split()
+    )
+    assert "AI project complete" in improve.SYSTEM
+
+    breakdown_system = " ".join(breakdown.SYSTEM.split())
+    assert "3 to 8 distinct steps" in breakdown_system
+    assert "Start every title with a clear action verb" in breakdown_system
+    assert "authentication, accounts, payments, or deployment" in breakdown_system
 
     plan_prompt = plan.build_prompt(
         [{"task_id": "id", "title": malicious_title, "overdue": True}],
@@ -67,7 +93,8 @@ def test_prompts_wrap_untrusted_text_and_include_date_and_budget():
     assert "today: 2026-11-20" in plan_prompt
     assert "available_minutes: 90" in plan_prompt
     assert "&lt;/task&gt;" in plan_prompt
-    assert "external calendar" in plan.SYSTEM
+    assert "scheduled in a calendar" in plan.SYSTEM
+    assert "must explain why the task is placed" in plan.SYSTEM
 
 
 def test_breakdown_deduplicates_and_preserves_order():
@@ -126,14 +153,12 @@ def test_breakdown_caps_output_at_eight_subtasks():
 def test_improve_clears_unsubstantiated_due_date():
     provider = ScriptedFakeProvider(
         [
-            json.dumps(
-                {
-                    "title": "Improved title",
-                    "description": None,
-                    "priority": "medium",
-                    "due_date": "2026-11-20",
-                }
-            )
+            _improve_output("Improved title", due_date="2026-11-20"),
+            _improve_output(
+                "Improved title",
+                "Organize the project notes into a clear reference.",
+                due_date="2026-11-20",
+            ),
         ]
     )
 
@@ -142,18 +167,67 @@ def test_improve_clears_unsubstantiated_due_date():
     )
 
     assert result["due_date"] is None
+    assert len(provider.calls) == 2
+    assert "previous description was null or empty" in provider.calls[1]["prompt"]
+
+
+def test_improve_returns_still_empty_description_after_one_retry():
+    provider = ScriptedFakeProvider(
+        [
+            _improve_output("Complete the project"),
+            _improve_output("Complete the project"),
+        ]
+    )
+
+    result = improve_task(
+        provider, "Project complete", None, TODAY, timeout_s=2
+    )
+
+    assert result["description"] is None
+    assert len(provider.calls) == 2
+
+
+def test_improve_retries_identical_title():
+    provider = ScriptedFakeProvider(
+        [
+            _improve_output("Review the report", "Check the report for errors."),
+            _improve_output("Review the report carefully", "Check the report for errors."),
+        ]
+    )
+
+    result = improve_task(
+        provider,
+        "Review the report",
+        "Check it for errors.",
+        TODAY,
+        timeout_s=2,
+    )
+
+    assert result["title"] == "Review the report carefully"
+    assert len(provider.calls) == 2
+    assert "previous title repeated the input" in provider.calls[1]["prompt"]
+
+
+def test_improve_does_not_treat_user_description_as_missing():
+    provider = ScriptedFakeProvider(
+        [_improve_output("Review the report", due_date=None)]
+    )
+
+    result = improve_task(
+        provider, "Review report", "Check for errors.", TODAY, timeout_s=2
+    )
+
+    assert result["description"] is None
+    assert len(provider.calls) == 1
 
 
 def test_improve_keeps_date_when_user_text_contains_explicit_date():
     provider = ScriptedFakeProvider(
         [
-            json.dumps(
-                {
-                    "title": "Submit report",
-                    "description": None,
-                    "priority": "high",
-                    "due_date": "2026-11-22",
-                }
+            _improve_output(
+                "Submit report",
+                "Send the report by the requested date.",
+                due_date="2026-11-22",
             )
         ]
     )
@@ -168,13 +242,10 @@ def test_improve_keeps_date_when_user_text_contains_explicit_date():
 def test_improve_keeps_resolvable_relative_date():
     provider = ScriptedFakeProvider(
         [
-            json.dumps(
-                {
-                    "title": "Follow up",
-                    "description": None,
-                    "priority": "medium",
-                    "due_date": "2026-11-22",
-                }
+            _improve_output(
+                "Follow up",
+                "Contact them again after the specified interval.",
+                due_date="2026-11-22",
             )
         ]
     )
@@ -253,6 +324,84 @@ def test_plan_retries_over_budget_output_and_warns_for_estimates():
     assert len(provider.calls) == 2
     assert result["total_minutes"] == 30
     assert "Estimated pending work exceeds available time." in result["warnings"]
+
+
+@pytest.mark.parametrize(
+    ("field", "claim"),
+    [
+        ("summary", "This task is completed."),
+        ("plan_reason", "The work is finished."),
+        ("postponed_reason", "Added to your calendar."),
+        ("warning", "This is scheduled in the calendar."),
+    ],
+)
+def test_plan_retries_unsupported_completion_claims(field, claim):
+    task = _pending_task("task-1", "Prepare report")
+    invalid = json.loads(_plan_output([_plan_item("task-1", 15)]))
+    if field == "summary":
+        invalid["summary"] = claim
+    elif field == "plan_reason":
+        invalid["plan"][0]["reason"] = claim
+    elif field == "postponed_reason":
+        invalid["plan"] = []
+        invalid["postponed"] = [
+            {"task_id": "task-1", "title": "Prepare report", "reason": claim}
+        ]
+        invalid["total_minutes"] = 0
+    else:
+        invalid["warnings"] = [claim]
+    corrected = _plan_output([_plan_item("task-1", 15)])
+    provider = ScriptedFakeProvider([json.dumps(invalid), corrected])
+
+    result = create_daily_plan(
+        provider,
+        [task],
+        total_pending=1,
+        today=TODAY,
+        available_minutes=60,
+        timeout_s=2,
+    )
+
+    assert len(provider.calls) == 2
+    assert len(result["plan"]) == 1
+
+
+def test_plan_invalid_claim_after_retry_raises_invalid_output():
+    task = _pending_task("task-1", "Prepare report")
+    invalid = json.loads(_plan_output([_plan_item("task-1", 15)]))
+    invalid["summary"] = "The task is completed."
+    provider = ScriptedFakeProvider([json.dumps(invalid), json.dumps(invalid)])
+
+    with pytest.raises(AIInvalidOutputError):
+        create_daily_plan(
+            provider,
+            [task],
+            total_pending=1,
+            today=TODAY,
+            available_minutes=60,
+            timeout_s=2,
+        )
+
+    assert len(provider.calls) == 2
+
+
+def test_plan_accepts_present_tense_complete():
+    task = _pending_task("task-1", "Prepare report")
+    valid = json.loads(_plan_output([_plan_item("task-1", 15)]))
+    valid["summary"] = "Complete the report first."
+    provider = ScriptedFakeProvider([json.dumps(valid)])
+
+    result = create_daily_plan(
+        provider,
+        [task],
+        total_pending=1,
+        today=TODAY,
+        available_minutes=60,
+        timeout_s=2,
+    )
+
+    assert result["summary"] == "Complete the report first."
+    assert len(provider.calls) == 1
 
 
 def test_plan_uses_database_titles_and_appends_unmentioned_tasks():

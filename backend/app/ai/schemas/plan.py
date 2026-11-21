@@ -1,3 +1,4 @@
+import re
 from datetime import date
 from typing import Annotated, Literal
 
@@ -13,6 +14,10 @@ from app.ai.schemas.common import (
 )
 
 ShortText = Annotated[str, Field(min_length=1, max_length=500)]
+_UNSUPPORTED_CLAIM = re.compile(
+    r"\b(?:completed|finished|scheduled\s+in|added\s+to\s+(?:your\s+)?calendar)\b",
+    re.IGNORECASE,
+)
 
 
 class PlanDraftItem(AIOutputModel):
@@ -73,4 +78,19 @@ class PlanDraft(AIOutputModel):
     def total_matches_plan(self):
         if self.total_minutes != sum(item.minutes for item in self.plan):
             raise ValueError("total_minutes must equal the plan minutes")
+        return self
+
+    @model_validator(mode="after")
+    def summary_reasons_and_warnings_are_future_facing(self):
+        text = [
+            self.summary,
+            *(item.reason for item in self.plan),
+            *(item.reason for item in self.postponed),
+            *self.warnings,
+        ]
+        if any(_UNSUPPORTED_CLAIM.search(item) for item in text):
+            raise ValueError(
+                "Summary, reasons, and warnings cannot claim tasks are done "
+                "or scheduled in a calendar"
+            )
         return self

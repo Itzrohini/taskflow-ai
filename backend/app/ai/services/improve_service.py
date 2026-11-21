@@ -1,4 +1,5 @@
 import re
+import time
 from datetime import date
 from typing import Any
 
@@ -36,13 +37,41 @@ def improve_task(
     *,
     timeout_s: float,
 ) -> dict[str, Any]:
+    prompt = improve.build_prompt(title, description, today)
+    deadline = time.monotonic() + timeout_s
     result = run_structured(
         provider,
         improve.SYSTEM,
-        improve.build_prompt(title, description, today),
+        prompt,
         ImprovedTask,
         timeout_s=timeout_s,
     )
+    missing_input_description = not (description and description.strip())
+    needs_description = missing_input_description and not result.description
+    identical_title = result.title.casefold() == title.strip().casefold()
+    if needs_description or identical_title:
+        corrections = []
+        if needs_description:
+            corrections.append(
+                "The previous description was null or empty. Return a concrete, "
+                "non-empty one- or two-sentence description based only on the "
+                "user's task text."
+            )
+        if identical_title:
+            corrections.append(
+                "The previous title repeated the input. Rewrite it as a clear "
+                "verb-first action of at most 80 characters while preserving "
+                "the user's intent."
+            )
+        result = run_structured(
+            provider,
+            improve.SYSTEM,
+            f"{prompt}\n\nCorrection: {' '.join(corrections)}",
+            ImprovedTask,
+            timeout_s=deadline - time.monotonic(),
+            max_attempts=1,
+        )
+
     text = f"{title}\n{description or ''}"
     return {
         "title": result.title,

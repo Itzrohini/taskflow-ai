@@ -97,7 +97,15 @@ def test_improve_endpoint_returns_null_due_date_without_date_reference(ai_app):
                     "priority": "medium",
                     "due_date": "2026-11-20",
                 }
-            )
+            ),
+            json.dumps(
+                {
+                    "title": "Improved title",
+                    "description": "Organize the notes into a clear reference.",
+                    "priority": "medium",
+                    "due_date": "2026-11-20",
+                }
+            ),
         ]
     )
     install_provider(ai_app, provider)

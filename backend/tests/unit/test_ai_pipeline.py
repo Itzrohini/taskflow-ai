@@ -10,7 +10,7 @@ from app.ai.errors import (
     AIRateLimitedError,
     AITimeoutError,
 )
-from app.ai.pipeline import run_structured
+from app.ai.pipeline import StructuredOutputPipeline, run_structured
 from tests.fakes import ScriptedFakeProvider
 
 
@@ -127,3 +127,13 @@ def test_pipeline_enforces_total_time_budget():
     with pytest.raises(AITimeoutError):
         run_structured(provider, "system", "prompt", SampleOutput, timeout_s=0.001)
     assert len(provider.calls) == 1
+
+
+def test_structured_output_pipeline_class_retries_and_strips_fences():
+    provider = ScriptedFakeProvider(["bad", "```json\n{\"name\":\"class\"}\n```"])
+    pipeline = StructuredOutputPipeline(provider, timeout_s=2)
+
+    result = pipeline.run("system", "prompt", SampleOutput)
+
+    assert result.name == "class"
+    assert len(provider.calls) == 2

@@ -23,13 +23,12 @@ class SlidingWindowRateLimiter:
         now = self._clock()
         cutoff = now - WINDOW_SECONDS
         with self._lock:
-            for existing_key, events in list(self._events.items()):
-                while events and events[0] <= cutoff:
-                    events.popleft()
-                if not events:
-                    del self._events[existing_key]
-
-            events = self._events.setdefault(key, deque())
+            events = self._events.get(key)
+            if events is None:
+                events = deque()
+                self._events[key] = events
+            while events and events[0] <= cutoff:
+                events.popleft()
             if len(events) >= limit:
                 raise AIRateLimitedError()
             events.append(now)

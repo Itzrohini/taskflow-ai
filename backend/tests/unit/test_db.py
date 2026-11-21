@@ -9,6 +9,8 @@ from app.core.errors import (
 )
 from app.db.indexes import ensure_indexes
 from app.main import create_app
+from app.schemas.task import TaskCreate
+from app.services.task_service import TaskService
 
 
 def test_settings_load_without_env(monkeypatch):
@@ -114,3 +116,22 @@ def test_database_unavailable_error_handler():
         response = test_client.get("/trigger-db-error")
         assert response.status_code == 503
         assert response.json() == {"detail": "Database is unavailable"}
+
+
+def test_task_service_accepts_fake_store():
+    class FakeStore:
+        def __init__(self):
+            self.document = None
+
+        def create(self, document):
+            self.document = document
+            return {"id": "fake", **document}
+
+    store = FakeStore()
+    service = TaskService(store)
+
+    result = service.create(TaskCreate(title="  Fake task  "))
+
+    assert result["title"] == "Fake task"
+    assert store.document["completed"] is False
+    assert store.document["subtasks"] == []

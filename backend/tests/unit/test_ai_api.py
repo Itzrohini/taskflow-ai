@@ -193,6 +193,19 @@ def test_ai_rate_limiter_rejects_after_configured_limit(ai_app):
     assert len(provider.calls) == 1
 
 
+def test_sliding_window_limiter_evicts_expired_key_and_isolates_keys():
+    now = [1000.0]
+    limiter = SlidingWindowRateLimiter(clock=lambda: now[0])
+
+    limiter.check("client-a", 1)
+    with pytest.raises(AIRateLimitedError):
+        limiter.check("client-a", 1)
+
+    limiter.check("client-b", 1)
+    now[0] += 3601
+    limiter.check("client-a", 1)
+
+
 def test_empty_pending_plan_does_not_call_ai_provider(ai_app):
     provider = ScriptedFakeProvider([])
     install_provider(ai_app, provider)

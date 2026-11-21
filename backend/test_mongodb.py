@@ -1,6 +1,8 @@
 import os
-from pymongo import MongoClient
+
 from dotenv import load_dotenv
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 load_dotenv()
 
@@ -21,7 +23,7 @@ try:
 
     print("MongoDB Atlas connection successful!")
 
-except Exception as e:
+except (PyMongoError, OSError, ValueError) as e:
     print("MongoDB connection failed:")
     print(type(e).__name__, str(e))
 

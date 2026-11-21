@@ -3,7 +3,8 @@ from typing import Any
 
 from pydantic import model_validator
 
-from app.ai.pipeline import run_structured
+from app.ai.base_service import AIFeatureService
+from app.ai.pipeline import StructuredOutputPipeline
 from app.ai.prompts import plan
 from app.ai.provider import AIProvider
 from app.ai.schemas.plan import PlanDraft
@@ -11,6 +12,7 @@ from app.ai.schemas.plan import PlanDraft
 MAX_PENDING_TASKS = 50
 _OVER_CAP_WARNING = "Only the first 50 pending tasks were considered."
 _TIME_WARNING = "Estimated pending work exceeds available time."
+_PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
 
 
 def _due_date_value(value: Any) -> date | None:
@@ -45,6 +47,89 @@ def _make_plan_model(
     return ContextualPlanDraft
 
 
+class PlanService(AIFeatureService[str, dict[str, Any]]):
+    """Service that creates a budget-aware plan from pending task data."""
+
+    def __init__(
+        self,
+        pipeline: StructuredOutputPipeline,
+        task_service: Any,
+    ) -> None:
+        super().__init__(pipeline)
+        self.task_service = task_service
+
+    def build_prompt(
+        self,
+        prompt_tasks: list[dict[str, Any]],
+        today: date,
+        available_minutes: int,
+    ) -> tuple[str, str]:
+        return plan.SYSTEM, plan.build_prompt(
+            prompt_tasks,
+            today,
+            available_minutes,
+        )
+
+    @property
+    def output_model(self) -> type[PlanDraft]:
+        return PlanDraft
+
+    def post_process(
+        self,
+        result: PlanDraft,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return dict(result.model_dump())
+
+    def execute(
+        self,
+        today: date,
+        available_minutes: int,
+    ) -> dict[str, Any]:
+        tasks_result = self.task_service.list(
+            status="pending",
+            priority=None,
+            query=None,
+            due=None,
+            today=today,
+            sort="created_desc",
+            limit=200,
+            skip=0,
+        )
+        return create_daily_plan(
+            self.pipeline.provider,
+            tasks_result["items"],
+            total_pending=tasks_result["total"],
+            today=today,
+            available_minutes=available_minutes,
+            timeout_s=self.pipeline.timeout_s,
+        )
+
+
+def rank_pending_tasks(
+    pending_tasks: list[dict[str, Any]],
+    today: date,
+) -> list[dict[str, Any]]:
+    """Rank pending tasks in O(n log n) by urgency before applying the cap."""
+
+    def sort_key(task: dict[str, Any]) -> tuple[int, int, date, int]:
+        due_date = _due_date_value(task.get("due_date"))
+        overdue = due_date is not None and due_date < today
+        duration = task.get("estimated_duration")
+        duration_key = duration if type(duration) is int else 10**9
+        due_key = due_date if due_date is not None else date.max
+        priority = str(task.get("priority"))
+        return (
+            0 if overdue else 1,
+            _PRIORITY_RANK.get(priority, len(_PRIORITY_RANK)),
+            due_key,
+            duration_key,
+        )
+
+    return sorted(pending_tasks, key=sort_key)
+
+
 def create_daily_plan(
     provider: AIProvider,
     pending_tasks: list[dict[str, Any]],
@@ -63,10 +148,11 @@ def create_daily_plan(
             "total_minutes": 0,
         }
 
+    ranked_tasks = rank_pending_tasks(pending_tasks, today)[:MAX_PENDING_TASKS]
     prompt_tasks = []
     task_by_id: dict[str, dict[str, Any]] = {}
     estimated_minutes = 0
-    for task in pending_tasks[:MAX_PENDING_TASKS]:
+    for task in ranked_tasks:
         task_id = str(task["id"])
         due_date = _due_date_value(task.get("due_date"))
         prompt_task = {
@@ -93,12 +179,10 @@ def create_daily_plan(
             estimated_minutes += duration
 
     output_model = _make_plan_model(set(task_by_id), available_minutes)
-    draft = run_structured(
-        provider,
+    draft = StructuredOutputPipeline(provider, timeout_s).run(
         plan.SYSTEM,
         plan.build_prompt(prompt_tasks, today, available_minutes),
         output_model,
-        timeout_s=timeout_s,
     )
 
     used_ids: set[str] = set()

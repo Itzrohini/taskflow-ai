@@ -7,7 +7,7 @@ from app.ai.errors import AIInvalidOutputError
 from app.ai.prompts import breakdown, improve, plan
 from app.ai.services.breakdown_service import break_down_task
 from app.ai.services.improve_service import improve_task
-from app.ai.services.plan_service import create_daily_plan
+from app.ai.services.plan_service import create_daily_plan, rank_pending_tasks
 from tests.fakes import ScriptedFakeProvider
 
 TODAY = date(2026, 11, 20)
@@ -60,6 +60,23 @@ def _pending_task(task_id, title, *, priority="medium", due_date=None, duration=
         "estimated_duration": duration,
         "subtasks": [],
     }
+
+
+def test_plan_ranking_prefers_overdue_priority_due_date_and_short_duration():
+    tasks = [
+        _pending_task("low", "Low", priority="low", due_date=date(2026, 11, 19), duration=60),
+        _pending_task("later", "Later", priority="high", due_date=date(2026, 11, 21), duration=60),
+        _pending_task("high-short", "High short", priority="high", due_date=date(2026, 11, 19), duration=20),
+        _pending_task("high-long", "High long", priority="high", due_date=date(2026, 11, 19), duration=50),
+    ]
+
+    ranked = rank_pending_tasks(tasks, TODAY)
+
+    assert [task["id"] for task in ranked[:3]] == [
+        "high-short",
+        "high-long",
+        "low",
+    ]
 
 
 def test_prompts_wrap_untrusted_text_and_include_date_and_budget():

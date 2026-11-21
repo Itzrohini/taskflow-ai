@@ -3,8 +3,9 @@ import time
 from datetime import date
 from typing import Any
 
+from app.ai.base_service import AIFeatureService
 from app.ai.errors import AIInvalidOutputError
-from app.ai.pipeline import run_structured
+from app.ai.pipeline import StructuredOutputPipeline
 from app.ai.prompts import improve
 from app.ai.provider import AIProvider
 from app.ai.schemas.improve import ImprovedTask
@@ -163,6 +164,80 @@ def _needs_title_retry(input_title: str, output_title: str) -> bool:
     )
 
 
+class ImproveService(AIFeatureService[str, dict[str, Any]]):
+    """Service that improves task text while preserving its intent."""
+
+    def build_prompt(
+        self,
+        title: str,
+        description: str | None,
+        today: date,
+    ) -> tuple[str, str]:
+        return improve.SYSTEM, improve.build_prompt(title, description, today)
+
+    @property
+    def output_model(self) -> type[ImprovedTask]:
+        return ImprovedTask
+
+    def post_process(
+        self,
+        result: ImprovedTask,
+        title: str,
+        description: str | None,
+        today: date,
+    ) -> dict[str, Any]:
+        text = f"{title}\n{description or ''}"
+        return {
+            "title": result.title,
+            "description": result.description,
+            "priority": result.priority,
+            "due_date": result.due_date if _DATE_REFERENCE.search(text) else None,
+        }
+
+    def execute(
+        self,
+        title: str,
+        description: str | None,
+        today: date,
+    ) -> dict[str, Any]:
+        system, prompt = self.build_prompt(title, description, today)
+        deadline = time.monotonic() + self.pipeline.timeout_s
+        schema = ImprovedTask.model_json_schema()
+        result = self.pipeline.run(
+            system,
+            prompt,
+            ImprovedTask,
+            correction_note=_DESCRIPTION_CORRECTION_NOTE,
+            schema=schema,
+            minimize_thinking=True,
+            max_output_tokens=512,
+        )
+        if _needs_title_retry(title, result.title):
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                retry_pipeline = StructuredOutputPipeline(
+                    self.pipeline.provider,
+                    remaining,
+                    max_attempts=1,
+                )
+                try:
+                    improved = retry_pipeline.run(
+                        system,
+                        f"{prompt}\n\nCorrection: The title repeats the input. "
+                        "Rewrite it as a clearer, more specific verb-first action "
+                        "that preserves the task's intent.",
+                        ImprovedTask,
+                        schema=schema,
+                        minimize_thinking=True,
+                        max_output_tokens=512,
+                    )
+                except AIInvalidOutputError:
+                    pass
+                else:
+                    result = improved
+        return self.post_process(result, title, description, today)
+
+
 def improve_task(
     provider: AIProvider,
     title: str,
@@ -171,46 +246,5 @@ def improve_task(
     *,
     timeout_s: float,
 ) -> dict[str, Any]:
-    prompt = improve.build_prompt(title, description, today)
-    deadline = time.monotonic() + timeout_s
-    schema = ImprovedTask.model_json_schema()
-    result = run_structured(
-        provider,
-        improve.SYSTEM,
-        prompt,
-        ImprovedTask,
-        timeout_s=timeout_s,
-        correction_note=_DESCRIPTION_CORRECTION_NOTE,
-        schema=schema,
-        minimize_thinking=True,
-        max_output_tokens=512,
-    )
-    if _needs_title_retry(title, result.title):
-        remaining = deadline - time.monotonic()
-        if remaining > 0:
-            try:
-                improved = run_structured(
-                    provider,
-                    improve.SYSTEM,
-                    f"{prompt}\n\nCorrection: The title repeats the input. "
-                    "Rewrite it as a clearer, more specific verb-first action "
-                    "that preserves the task's intent.",
-                    ImprovedTask,
-                    timeout_s=remaining,
-                    max_attempts=1,
-                    schema=schema,
-                    minimize_thinking=True,
-                    max_output_tokens=512,
-                )
-            except AIInvalidOutputError:
-                pass
-            else:
-                result = improved
-
-    text = f"{title}\n{description or ''}"
-    return {
-        "title": result.title,
-        "description": result.description,
-        "priority": result.priority,
-        "due_date": result.due_date if _DATE_REFERENCE.search(text) else None,
-    }
+    pipeline = StructuredOutputPipeline(provider, timeout_s)
+    return ImproveService(pipeline).execute(title, description, today)

@@ -4,11 +4,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pymongo.database import Database
 
+from app.ai.pipeline import StructuredOutputPipeline
 from app.ai.provider import AIProvider
 from app.ai.providers.gemini import GeminiProvider
-from app.ai.services.breakdown_service import break_down_task
-from app.ai.services.improve_service import improve_task
-from app.ai.services.plan_service import create_daily_plan
+from app.ai.services.breakdown_service import BreakdownService
+from app.ai.services.improve_service import ImproveService
+from app.ai.services.plan_service import PlanService
 from app.core.config import get_settings
 from app.core.rate_limit import enforce_ai_rate_limit
 from app.db.mongo import get_database
@@ -45,11 +46,13 @@ def breakdown(
     request: BreakdownRequest,
     provider: Annotated[AIProvider, Depends(get_ai_provider)],
 ):
-    return break_down_task(
+    pipeline = StructuredOutputPipeline(
         provider,
+        get_settings().AI_TIMEOUT_SECONDS,
+    )
+    return BreakdownService(pipeline).execute(
         request.title,
         request.description,
-        timeout_s=get_settings().AI_TIMEOUT_SECONDS,
     )
 
 
@@ -58,12 +61,14 @@ def improve(
     request: ImproveRequest,
     provider: Annotated[AIProvider, Depends(get_ai_provider)],
 ):
-    return improve_task(
+    pipeline = StructuredOutputPipeline(
         provider,
+        get_settings().AI_TIMEOUT_SECONDS,
+    )
+    return ImproveService(pipeline).execute(
         request.title,
         request.description,
         _today_or_utc(request.today),
-        timeout_s=get_settings().AI_TIMEOUT_SECONDS,
     )
 
 
@@ -74,21 +79,11 @@ def plan(
     task_service: Annotated[TaskService, Depends(get_plan_task_service)],
 ):
     today = _today_or_utc(request.today)
-    tasks_result = task_service.list(
-        status="pending",
-        priority=None,
-        query=None,
-        due=None,
-        today=today,
-        sort="created_desc",
-        limit=50,
-        skip=0,
-    )
-    return create_daily_plan(
+    pipeline = StructuredOutputPipeline(
         provider,
-        tasks_result["items"],
-        total_pending=tasks_result["total"],
-        today=today,
-        available_minutes=request.available_minutes,
-        timeout_s=get_settings().AI_TIMEOUT_SECONDS,
+        get_settings().AI_TIMEOUT_SECONDS,
+    )
+    return PlanService(pipeline, task_service).execute(
+        today,
+        request.available_minutes,
     )

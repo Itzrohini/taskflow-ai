@@ -1,8 +1,7 @@
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
-from app.repositories.task_repository import TaskRepository
 from app.schemas.task import (
     SubtaskCreate,
     SubtaskUpdate,
@@ -11,13 +10,56 @@ from app.schemas.task import (
 )
 
 
+class TaskStore(Protocol):
+    """Persistence boundary used by TaskService."""
+
+    def create(self, document: dict[str, Any]) -> dict[str, Any]: ...
+    def get(self, task_id: str) -> dict[str, Any]: ...
+    def update(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any]: ...
+    def delete(self, task_id: str) -> None: ...
+    def add_subtasks(
+        self,
+        task_id: str,
+        subtasks: list[dict[str, Any]],
+        updated_at: datetime,
+    ) -> dict[str, Any]: ...
+    def update_subtask(
+        self,
+        task_id: str,
+        subtask_id: str,
+        updates: dict[str, Any],
+        updated_at: datetime,
+    ) -> dict[str, Any]: ...
+    def delete_subtask(
+        self,
+        task_id: str,
+        subtask_id: str,
+        updated_at: datetime,
+    ) -> dict[str, Any]: ...
+    def list(
+        self,
+        *,
+        status: str,
+        priority: str | None,
+        query: str | None,
+        due: str | None,
+        today: date,
+        sort: str,
+        limit: int,
+        skip: int,
+    ) -> tuple[list[dict[str, Any]], int]: ...
+    def stats(self, today: date) -> dict[str, Any]: ...
+
+
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
 class TaskService:
-    def __init__(self, repository: TaskRepository) -> None:
-        self.repository = repository
+    """Coordinates task business rules and persistence operations."""
+
+    def __init__(self, store: TaskStore) -> None:
+        self.store = store
 
     def create(self, task: TaskCreate) -> dict[str, Any]:
         now = utc_now()
@@ -36,10 +78,10 @@ class TaskService:
                 "completed_at": None,
             }
         )
-        return self.repository.create(document)
+        return self.store.create(document)
 
     def get(self, task_id: str) -> dict[str, Any]:
-        return self.repository.get(task_id)
+        return self.store.get(task_id)
 
     def update(self, task_id: str, task: TaskUpdate) -> dict[str, Any]:
         updates = task.model_dump(exclude_unset=True)
@@ -51,28 +93,28 @@ class TaskService:
         updates["updated_at"] = now
         if "completed" in updates:
             updates["completed_at"] = now if updates["completed"] else None
-        return self.repository.update(task_id, updates)
+        return self.store.update(task_id, updates)
 
     def delete(self, task_id: str) -> None:
-        self.repository.delete(task_id)
+        self.store.delete(task_id)
 
     def add_subtasks(
         self, task_id: str, subtasks: list[SubtaskCreate]
     ) -> dict[str, Any]:
         now = utc_now()
         documents = [self._new_subtask(subtask, now) for subtask in subtasks]
-        return self.repository.add_subtasks(task_id, documents, now)
+        return self.store.add_subtasks(task_id, documents, now)
 
     def update_subtask(
         self, task_id: str, subtask_id: str, subtask: SubtaskUpdate
     ) -> dict[str, Any]:
         updates = subtask.model_dump(exclude_unset=True)
-        return self.repository.update_subtask(
+        return self.store.update_subtask(
             task_id, subtask_id, updates, utc_now()
         )
 
     def delete_subtask(self, task_id: str, subtask_id: str) -> dict[str, Any]:
-        return self.repository.delete_subtask(task_id, subtask_id, utc_now())
+        return self.store.delete_subtask(task_id, subtask_id, utc_now())
 
     def list(
         self,
@@ -86,7 +128,7 @@ class TaskService:
         limit: int,
         skip: int,
     ) -> dict[str, Any]:
-        items, total = self.repository.list(
+        items, total = self.store.list(
             status=status,
             priority=priority,
             query=query,
@@ -99,7 +141,7 @@ class TaskService:
         return {"items": items, "total": total}
 
     def stats(self, today: date) -> dict[str, Any]:
-        stats = self.repository.stats(today)
+        stats = self.store.stats(today)
         total = stats["total"]
         stats["completion_rate"] = (
             round(stats["completed"] * 100 / total, 1) if total else 0.0

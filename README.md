@@ -71,6 +71,7 @@ src/                  Next.js application
   lib/                API client, types, constants, and date helpers
   __tests__/          Vitest tests
 backend/
+  vercel.json         Vercel Python function duration
   app/
     api/v1/           HTTP health, task, and AI routers
     ai/               Provider abstraction, prompts, schemas, and AI services
@@ -277,43 +278,42 @@ Fresh verification: Vitest has 11 test files and 36 tests passing. Backend pytes
 
 1. Create an Atlas cluster.
 2. Create a database user and store its credentials safely.
-3. Allow Replit network access. Atlas IP allowlisting is the shared Replit/network security control.
+3. In **Network Access**, add `0.0.0.0/0` so Vercel serverless functions can reach the cluster. This permits connections from any IPv4 address; use a strong database password and least-privilege database user, and restrict access further if your hosting setup supports stable egress IPs.
 4. Copy the Atlas connection string and set it as `MONGODB_URI`.
 5. Set `MONGODB_DB_NAME` explicitly for the deployed database.
 
-### Replit backend
+### Backend API on Vercel
 
-Set Replit to install `backend/requirements.txt`, then run:
+Deploy the backend as a separate Vercel project using the same Git repository:
 
-```bash
-cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
+1. Set **Root Directory** to `backend`.
+2. Vercel reads `backend/vercel.json` and exposes `app/main.py` as the FastAPI function with a 60-second maximum duration.
+3. Add these backend environment variables in Vercel:
+   - `MONGODB_URI`
+   - `MONGODB_DB_NAME`
+   - `GEMINI_API_KEY`
+   - `GEMINI_MODEL=gemini-3.5-flash-lite`
+   - `CORS_ORIGINS`, as a JSON list including the deployed frontend origin, for example `["https://your-frontend.vercel.app"]`
+4. Deploy and copy the backend project URL.
 
-Configure these Replit secrets:
+`gemini-2.5-flash-lite` returned HTTP 404 for this project's configured key during live checks. Use a currently available model; `gemini-3.5-flash-lite` was verified successfully.
 
-- `MONGODB_URI`
-- `MONGODB_DB_NAME`
-- `GEMINI_API_KEY`
-- `GEMINI_MODEL`
-- `CORS_ORIGINS`
+### Frontend on Vercel
 
-Set `CORS_ORIGINS` to the JSON list format documented above.
+1. Create a second Vercel project from the same repository and use the repository root as its **Root Directory**.
+2. Set `NEXT_PUBLIC_API_URL` to the backend Vercel project URL (the base URL, without `/api/v1`).
+3. Deploy the frontend. Redeploy it whenever `NEXT_PUBLIC_API_URL` changes because the value is embedded during the frontend build.
+4. Add the final frontend origin to the backend project's `CORS_ORIGINS` JSON list, then redeploy the backend.
 
-### Vercel frontend
-
-1. Import the repository in Vercel.
-2. Set `NEXT_PUBLIC_API_URL` to the Replit backend URL.
-3. Redeploy the frontend.
-4. Add the final Vercel URL to backend `CORS_ORIGINS`, then redeploy or restart the backend.
-
-No Replit- or Vercel-specific configuration files are required.
+The backend uses `backend/vercel.json`; no frontend-specific Vercel configuration file is needed.
 
 ## Known limitations
 
 - There is no authentication; all users share one task workspace.
-- The AI rate limiter is in-memory and per process, so limits reset on restart and are not shared across Replit processes.
+- The AI rate limiter is in-memory per Vercel function instance, not shared across instances; limits reset when an instance restarts.
+- Serverless cold starts can make the first request slower.
 - Daily plan results are session/client UI state only and are not persisted.
-- Using `0.0.0.0/0` in Atlas is convenient for Replit but reduces network allowlisting security.
+- Atlas access using `0.0.0.0/0` allows connections from any IPv4 address and reduces network allowlisting security.
 - Gemini free-tier latency and quota limits can cause timeouts or provider errors.
 - Gemini model availability and deprecation can require an environment model update.
 - AI output can be imperfect; task and subtask suggestions remain manually editable.

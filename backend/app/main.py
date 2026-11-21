@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from threading import Lock
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,55 +19,29 @@ from app.core.errors import (
     not_found_exception_handler,
     pymongo_exception_handler,
 )
-from app.db.indexes import ensure_indexes
-from app.db.mongo import create_client
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-    client = None
-    if settings.MONGODB_URI:
-        try:
-            client = create_client(settings)
-            app.state.mongo_client = client
-        except (PyMongoError, OSError, ValueError) as exc:
-            if isinstance(exc, PyMongoError):
-                log_pymongo_error("MongoDB client initialization at startup", exc)
-            else:
-                logger.warning(
-                    "Failed to initialize MongoDB client at startup (%s)",
-                    type(exc).__name__,
-                )
+    try:
+        yield
+    finally:
+        with app.state.mongo_lock:
+            client = app.state.mongo_client
             app.state.mongo_client = None
-
-        if app.state.mongo_client is not None:
-            try:
-                db = client[settings.MONGODB_DB_NAME]
-                ensure_indexes(db)
-            except (PyMongoError, OSError) as exc:
-                if isinstance(exc, PyMongoError):
-                    log_pymongo_error("Database index creation at startup", exc)
-                else:
-                    logger.warning(
-                        "Failed to create database indexes at startup (%s)",
-                        type(exc).__name__,
-                    )
-    else:
-        app.state.mongo_client = None
-
-    yield
-
-    if getattr(app.state, "mongo_client", None) is not None:
-        try:
-            app.state.mongo_client.close()
-        except (PyMongoError, OSError) as exc:
-            logger.warning(
-                "Error closing MongoDB client at shutdown (%s)",
-                type(exc).__name__,
-            )
+            if client is not None:
+                try:
+                    client.close()
+                except (PyMongoError, OSError) as exc:
+                    if isinstance(exc, PyMongoError):
+                        log_pymongo_error("MongoDB client shutdown", exc)
+                    else:
+                        logger.warning(
+                            "Error closing MongoDB client at shutdown (%s)",
+                            type(exc).__name__,
+                        )
 
 
 def create_app() -> FastAPI:
@@ -76,6 +51,9 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    app.state.mongo_client = None
+    app.state.mongo_lock = Lock()
+    app.state.mongo_indexes_attempted = False
 
     app.add_middleware(
         CORSMiddleware,

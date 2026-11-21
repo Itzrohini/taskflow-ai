@@ -14,11 +14,14 @@ from app.ai.providers.gemini import GeminiProvider
 from app.core.config import Settings
 
 
-def create_settings(api_key: str = "unit-test-key") -> Settings:
+def create_settings(
+    api_key: str = "unit-test-key",
+    model: str = "gemini-test-model",
+) -> Settings:
     return Settings(
         _env_file=None,
         GEMINI_API_KEY=api_key,
-        GEMINI_MODEL="gemini-test-model",
+        GEMINI_MODEL=model,
     )
 
 
@@ -53,6 +56,66 @@ def test_gemini_provider_uses_json_mode_timeout_and_closes_client():
     assert call["config"].http_options.timeout == 1250
     assert call["config"].http_options.retry_options.attempts == 1
     client.close.assert_called_once()
+
+
+def test_gemini_provider_sends_sanitized_json_schema_and_minimal_thinking():
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content.return_value = SimpleNamespace(text='{"ok":true}')
+    provider = GeminiProvider(create_settings(model="gemini-2.5-flash"))
+    schema = {
+        "type": "object",
+        "properties": {
+            "description": {
+                "type": "string",
+                "minLength": 15,
+                "maxLength": 2000,
+                "pattern": "ignored-by-provider",
+            }
+        },
+        "required": ["description"],
+        "additionalProperties": False,
+    }
+
+    with patch("app.ai.providers.gemini.genai.Client", return_value=client):
+        provider.generate_json(
+            "system",
+            "prompt",
+            timeout_s=2,
+            schema=schema,
+            minimize_thinking=True,
+            max_output_tokens=512,
+        )
+
+    config = client.models.generate_content.call_args.kwargs["config"]
+    assert config.response_json_schema == {
+        "type": "object",
+        "properties": {"description": {"type": "string"}},
+        "required": ["description"],
+        "additionalProperties": False,
+    }
+    assert config.response_schema is None
+    assert config.thinking_config.thinking_budget == 0
+    assert config.thinking_config.thinking_level is None
+    assert config.max_output_tokens == 512
+
+
+def test_gemini_3_uses_only_minimal_thinking_level():
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content.return_value = SimpleNamespace(text='{"ok":true}')
+    provider = GeminiProvider(create_settings(model="gemini-3-flash-preview"))
+
+    with patch("app.ai.providers.gemini.genai.Client", return_value=client):
+        provider.generate_json(
+            "system", "prompt", timeout_s=2, minimize_thinking=True
+        )
+
+    thinking_config = client.models.generate_content.call_args.kwargs[
+        "config"
+    ].thinking_config
+    assert thinking_config.thinking_level.value == "MINIMAL"
+    assert thinking_config.thinking_budget is None
 
 
 @pytest.mark.parametrize(

@@ -47,6 +47,28 @@ def test_pipeline_retries_invalid_json_once_and_corrects_prompt():
     assert "Correction:" in str(provider.calls[1]["prompt"])
 
 
+def test_pipeline_passes_schema_and_custom_correction_note():
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+    note = "description is required: write 1-2 sentences stating the concrete outcome"
+    provider = ScriptedFakeProvider(['{"name":""}', '{"name":"recovered"}'])
+
+    result = run_structured(
+        provider,
+        "system",
+        "original",
+        SampleOutput,
+        timeout_s=2,
+        correction_note=note,
+        schema=schema,
+        minimize_thinking=True,
+    )
+
+    assert result.name == "recovered"
+    assert provider.calls[0]["schema"] is schema
+    assert provider.calls[0]["minimize_thinking"] is True
+    assert note in provider.calls[1]["prompt"]
+
+
 def test_pipeline_fails_after_two_invalid_outputs():
     provider = ScriptedFakeProvider(["bad", "still bad"])
 

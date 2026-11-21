@@ -72,13 +72,14 @@ def test_prompts_wrap_untrusted_text_and_include_date_and_budget():
     improve_prompt = improve.build_prompt("title", None, TODAY)
     assert "today: 2026-11-20" in improve_prompt
     assert "<task>" in improve_prompt
-    assert "verb-first action" in improve.SYSTEM
-    assert "at most 80 characters" in improve.SYSTEM
-    assert "non-null description" in improve.SYSTEM
-    assert "Never invent names, numbers, tools, dates" in " ".join(
+    assert "verb-first" in improve.SYSTEM
+    assert "3-80 characters" in improve.SYSTEM
+    assert "REQUIRED, non-empty, 1-2 sentences" in improve.SYSTEM
+    assert "Never invent names, numbers, tools, or dates" in " ".join(
         improve.SYSTEM.split()
     )
     assert "AI project complete" in improve.SYSTEM
+    assert "submit report tomorrow" in improve.SYSTEM
 
     breakdown_system = " ".join(breakdown.SYSTEM.split())
     assert "3 to 8 distinct steps" in breakdown_system
@@ -148,6 +149,7 @@ def test_breakdown_caps_output_at_eight_subtasks():
 
     assert len(provider.calls) == 2
     assert len(result["subtasks"]) == 8
+    assert provider.calls[0]["schema"] is None
 
 
 def test_improve_clears_unsubstantiated_due_date():
@@ -168,56 +170,99 @@ def test_improve_clears_unsubstantiated_due_date():
 
     assert result["due_date"] is None
     assert len(provider.calls) == 2
-    assert "previous description was null or empty" in provider.calls[1]["prompt"]
+    assert (
+        "description is required: write 1-2 sentences stating the concrete "
+        "outcome or done-criteria, using only facts from the task text"
+        in provider.calls[1]["prompt"]
+    )
+    schema = provider.calls[0]["schema"]
+    assert isinstance(schema, dict)
+    assert schema["properties"]["description"]["minLength"] == 15
+    assert schema["properties"]["title"]["minLength"] == 3
+    assert provider.calls[0]["minimize_thinking"] is True
+    assert provider.calls[0]["max_output_tokens"] == 512
 
 
-def test_improve_returns_still_empty_description_after_one_retry():
+@pytest.mark.parametrize("bad_description", [None, "", "Too short."])
+def test_improve_rejects_bad_descriptions_after_two_attempts(bad_description):
     provider = ScriptedFakeProvider(
         [
-            _improve_output("Complete the project"),
-            _improve_output("Complete the project"),
+            _improve_output("Complete the project", bad_description),
+            _improve_output("Complete the project", bad_description),
         ]
     )
 
-    result = improve_task(
-        provider, "Project complete", None, TODAY, timeout_s=2
-    )
+    with pytest.raises(AIInvalidOutputError):
+        improve_task(provider, "Project complete", None, TODAY, timeout_s=2)
 
-    assert result["description"] is None
     assert len(provider.calls) == 2
+    assert "description is required:" in provider.calls[1]["prompt"]
 
 
 def test_improve_retries_identical_title():
     provider = ScriptedFakeProvider(
         [
-            _improve_output("Review the report", "Check the report for errors."),
-            _improve_output("Review the report carefully", "Check the report for errors."),
+            _improve_output(
+                "ai project complete",
+                "Finish the remaining work on the AI project and confirm it is ready to submit.",
+            ),
+            _improve_output(
+                "Complete the AI project",
+                "Finish the remaining work on the AI project and confirm it is ready to submit.",
+            ),
         ]
     )
 
     result = improve_task(
         provider,
-        "Review the report",
-        "Check it for errors.",
+        "AI project complete",
+        None,
         TODAY,
         timeout_s=2,
     )
 
-    assert result["title"] == "Review the report carefully"
+    assert result["title"] == "Complete the AI project"
     assert len(provider.calls) == 2
-    assert "previous title repeated the input" in provider.calls[1]["prompt"]
+    assert "clearer, more specific verb-first action" in provider.calls[1]["prompt"]
 
 
-def test_improve_does_not_treat_user_description_as_missing():
+def test_improve_invalid_title_retry_keeps_first_valid_output():
     provider = ScriptedFakeProvider(
-        [_improve_output("Review the report", due_date=None)]
+        [
+            _improve_output(
+                "AI project complete",
+                "Finish the remaining work on the AI project and confirm it is ready to submit.",
+            ),
+            _improve_output("Complete the AI project", "Too short."),
+        ]
+    )
+
+    result = improve_task(
+        provider, "AI project complete", None, TODAY, timeout_s=2
+    )
+
+    assert result["title"] == "AI project complete"
+    assert result["description"].startswith("Finish the remaining work")
+    assert len(provider.calls) == 2
+
+
+def test_improve_polishes_user_supplied_description():
+    provider = ScriptedFakeProvider(
+        [
+            _improve_output(
+                "Review the report",
+                "Review the report for errors and improve its clarity.",
+            )
+        ]
     )
 
     result = improve_task(
         provider, "Review report", "Check for errors.", TODAY, timeout_s=2
     )
 
-    assert result["description"] is None
+    assert result["description"] == (
+        "Review the report for errors and improve its clarity."
+    )
     assert len(provider.calls) == 1
 
 

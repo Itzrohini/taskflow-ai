@@ -2,7 +2,7 @@ import mongomock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.errors import (
     DatabaseUnavailableError,
     database_unavailable_exception_handler,
@@ -32,7 +32,7 @@ def test_settings_load_without_env(monkeypatch):
     assert settings.MONGODB_DB_NAME == "taskflow"
     assert settings.MONGODB_TIMEOUT_MS == 5000
     assert settings.GEMINI_API_KEY == ""
-    assert settings.GEMINI_MODEL == "gemini-2.5-flash"
+    assert settings.GEMINI_MODEL == "gemini-2.5-flash-lite"
     assert settings.AI_TIMEOUT_SECONDS == 20
     assert settings.AI_RATE_LIMIT_PER_HOUR == 100
 
@@ -74,6 +74,29 @@ def test_app_boots_with_empty_mongodb_uri(monkeypatch):
         response = test_client.get("/health")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+def test_vercel_origin_passes_cors_preflight(monkeypatch):
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        '["http://localhost:3000","https://taskflow.example.vercel.app"]',
+    )
+    get_settings.cache_clear()
+    app = create_app()
+    with TestClient(app) as test_client:
+        response = test_client.options(
+            "/api/v1/tasks/",
+            headers={
+                "Origin": "https://taskflow.example.vercel.app",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+    get_settings.cache_clear()
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == (
+        "https://taskflow.example.vercel.app"
+    )
 
 
 def test_database_unavailable_error_handler():

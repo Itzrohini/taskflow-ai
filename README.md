@@ -13,10 +13,43 @@ TaskFlow AI is a local-first task dashboard for small, unstructured workloads. I
 
 ```mermaid
 flowchart LR
-  Browser --> Next["Next.js frontend"]
-  Next --> API["FastAPI backend"]
-  API --> Mongo["MongoDB"]
-  API --> Gemini["Gemini AI"]
+  User((User))
+
+  subgraph Frontend["Frontend · Next.js 16"]
+    UI["Task dashboard and AI dialogs"]
+    Hooks["React hooks"]
+    Client["API client"]
+    User --> UI --> Hooks --> Client
+  end
+
+  subgraph Backend["Backend · FastAPI"]
+    TaskRouter["Task router"]
+    TaskService["Task service"]
+    Repository["Task repository"]
+
+    AIRouter["AI router"]
+    AIServices["Improve, Breakdown, and Plan services"]
+    Prompts["Feature prompts and Pydantic schemas"]
+    Pipeline["Structured-output pipeline<br/>JSON parsing · validation · one corrective retry"]
+    Provider["AIProvider abstraction"]
+    GeminiProvider["GeminiProvider"]
+
+    TaskRouter --> TaskService --> Repository
+    AIRouter --> AIServices
+    AIServices --> Prompts --> Pipeline
+    AIServices -->|"Plan reads pending tasks"| TaskService
+    Pipeline --> Provider --> GeminiProvider
+    GeminiProvider --> Gemini["Gemini API"]
+    Gemini --> GeminiProvider
+    GeminiProvider --> Pipeline
+    Pipeline --> AIServices
+  end
+
+  Repository --> MongoDB[(MongoDB)]
+  Client --> TaskRouter
+  Client --> AIRouter
+  AIServices -->|"Editable suggestions; not auto-saved"| Client
+  UI -->|"User explicitly saves"| TaskRouter
 ```
 
 FastAPI requests flow through routers, services, and repositories. Task CRUD stays in `app/api/v1/tasks.py` -> `app/services/task_service.py` -> `app/repositories/task_repository.py` -> MongoDB. AI code is isolated in `app/ai/`; task CRUD does not import or depend on AI services, and AI endpoint failures do not disable CRUD.

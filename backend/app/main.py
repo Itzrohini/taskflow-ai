@@ -14,6 +14,7 @@ from app.core.errors import (
     DatabaseUnavailableError,
     NotFoundError,
     database_unavailable_exception_handler,
+    log_pymongo_error,
     not_found_exception_handler,
     pymongo_exception_handler,
 )
@@ -32,10 +33,13 @@ async def lifespan(app: FastAPI):
             client = create_client(settings)
             app.state.mongo_client = client
         except (PyMongoError, OSError, ValueError) as exc:
-            logger.warning(
-                "Failed to initialize MongoDB client at startup (%s)",
-                type(exc).__name__,
-            )
+            if isinstance(exc, PyMongoError):
+                log_pymongo_error("MongoDB client initialization at startup", exc)
+            else:
+                logger.warning(
+                    "Failed to initialize MongoDB client at startup (%s)",
+                    type(exc).__name__,
+                )
             app.state.mongo_client = None
 
         if app.state.mongo_client is not None:
@@ -43,10 +47,13 @@ async def lifespan(app: FastAPI):
                 db = client[settings.MONGODB_DB_NAME]
                 ensure_indexes(db)
             except (PyMongoError, OSError) as exc:
-                logger.warning(
-                    "Failed to create database indexes at startup (%s)",
-                    type(exc).__name__,
-                )
+                if isinstance(exc, PyMongoError):
+                    log_pymongo_error("Database index creation at startup", exc)
+                else:
+                    logger.warning(
+                        "Failed to create database indexes at startup (%s)",
+                        type(exc).__name__,
+                    )
     else:
         app.state.mongo_client = None
 

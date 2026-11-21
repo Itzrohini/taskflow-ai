@@ -1,5 +1,6 @@
 import logging
 import math
+import time
 from typing import Any
 
 import httpx2
@@ -71,6 +72,24 @@ def _minimal_thinking_config(model: str) -> types.ThinkingConfig | None:
     return None
 
 
+def _generate_config(
+    system: str,
+    timeout_s: float,
+    options: dict[str, Any],
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=system,
+        temperature=0.2,
+        response_mime_type="application/json",
+        automatic_continuation=False,
+        http_options=types.HttpOptions(
+            timeout=max(1, math.ceil(timeout_s * 1000)),
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
+        **options,
+    )
+
+
 class GeminiProvider(AIProvider):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -90,6 +109,7 @@ class GeminiProvider(AIProvider):
             raise AINotConfiguredError()
         if timeout_s <= 0:
             raise AITimeoutError()
+        deadline = time.monotonic() + timeout_s
 
         config_options: dict[str, Any] = {}
         if schema is not None:
@@ -101,24 +121,39 @@ class GeminiProvider(AIProvider):
         if max_output_tokens is not None:
             config_options["max_output_tokens"] = max_output_tokens
 
-        config = types.GenerateContentConfig(
-            system_instruction=system,
-            temperature=0.2,
-            response_mime_type="application/json",
-            automatic_continuation=False,
-            http_options=types.HttpOptions(
-                timeout=max(1, math.ceil(timeout_s * 1000)),
-                retry_options=types.HttpRetryOptions(attempts=1),
-            ),
-            **config_options,
-        )
         try:
             with genai.Client(api_key=api_key) as client:
-                response = client.models.generate_content(
-                    model=self.settings.GEMINI_MODEL,
-                    contents=prompt,
-                    config=config,
-                )
+                try:
+                    response = client.models.generate_content(
+                        model=self.settings.GEMINI_MODEL,
+                        contents=prompt,
+                        config=_generate_config(
+                            system,
+                            timeout_s,
+                            config_options,
+                        ),
+                    )
+                except errors.APIError as exc:
+                    if exc.code != 400 or schema is None:
+                        raise
+                    logger.warning(
+                        "Gemini rejected structured output schema (HTTP 400); "
+                        "retrying in JSON mode without schema"
+                    )
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise AITimeoutError() from exc
+                    fallback_options = dict(config_options)
+                    fallback_options.pop("response_json_schema", None)
+                    response = client.models.generate_content(
+                        model=self.settings.GEMINI_MODEL,
+                        contents=prompt,
+                        config=_generate_config(
+                            system,
+                            remaining,
+                            fallback_options,
+                        ),
+                    )
         except (TimeoutError, httpx2.TimeoutException) as exc:
             logger.warning("Gemini request timed out")
             raise AITimeoutError() from exc
@@ -135,7 +170,7 @@ class GeminiProvider(AIProvider):
                 "TIMEOUT",
             }:
                 raise AITimeoutError() from exc
-            raise AIProviderError() from exc
+            raise AIProviderError(retryable=exc.code >= 500) from exc
         except httpx2.HTTPError as exc:
             logger.warning(
                 "Gemini transport failed (%s)",
@@ -143,10 +178,10 @@ class GeminiProvider(AIProvider):
             )
             raise AIProviderError() from exc
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "Unexpected Gemini client failure (%s)",
                 type(exc).__name__,
             )
-            raise AIProviderError() from exc
+            raise
 
         return response.text or ""

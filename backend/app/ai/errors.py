@@ -40,6 +40,10 @@ class AIProviderError(AIError):
     code = "ai_provider_error"
     message = "The AI service is temporarily unavailable."
 
+    def __init__(self, *, retryable: bool = True) -> None:
+        self.retryable = retryable
+        super().__init__()
+
 
 async def ai_exception_handler(request: Request, exc: AIError) -> JSONResponse:
     return JSONResponse(

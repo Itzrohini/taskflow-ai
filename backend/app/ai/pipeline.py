@@ -77,7 +77,9 @@ class StructuredOutputPipeline:
                 )
             except (AINotConfiguredError, AIRateLimitedError):
                 raise
-            except (AITimeoutError, AIProviderError):
+            except (AITimeoutError, AIProviderError) as exc:
+                if isinstance(exc, AIProviderError) and not exc.retryable:
+                    raise
                 if attempt + 1 == self.max_attempts:
                     raise
                 if time.monotonic() >= deadline:

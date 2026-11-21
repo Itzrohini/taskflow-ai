@@ -106,6 +106,16 @@ def test_pipeline_retries_transient_provider_error():
     assert len(provider.calls) == 2
 
 
+def test_pipeline_does_not_retry_permanent_provider_error():
+    error = AIProviderError(retryable=False)
+    provider = ScriptedFakeProvider([error])
+
+    with pytest.raises(AIProviderError):
+        run_structured(provider, "system", "prompt", SampleOutput, timeout_s=2)
+
+    assert len(provider.calls) == 1
+
+
 @pytest.mark.parametrize("error", [AINotConfiguredError(), AIRateLimitedError()])
 def test_pipeline_does_not_retry_nontransient_errors(error):
     provider = ScriptedFakeProvider([error])

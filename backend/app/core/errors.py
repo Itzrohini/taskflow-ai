@@ -1,6 +1,18 @@
+import logging
+import re
+
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from pymongo.errors import PyMongoError
+
+logger = logging.getLogger(__name__)
+_MONGODB_URI_PATTERN = re.compile(r"mongodb(?:\+srv)?://[^\s\"'<>]+", re.IGNORECASE)
+
+
+def log_pymongo_error(context: str, exc: PyMongoError) -> None:
+    """Log MongoDB diagnostics while redacting any connection URI."""
+    message = _MONGODB_URI_PATTERN.sub("[REDACTED_MONGODB_URI]", str(exc))
+    logger.warning("%s failed (%s): %s", context, type(exc).__name__, message)
 
 
 class DatabaseUnavailableError(Exception):
@@ -40,6 +52,7 @@ async def not_found_exception_handler(
 async def pymongo_exception_handler(
     request: Request, exc: PyMongoError
 ) -> JSONResponse:
+    log_pymongo_error("MongoDB request", exc)
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": "Database is unavailable"},

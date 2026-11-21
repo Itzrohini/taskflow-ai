@@ -198,7 +198,7 @@ Backend:
 | `MONGODB_DB_NAME` | MongoDB database name | `taskflow` |
 | `MONGODB_TIMEOUT_MS` | MongoDB server selection timeout | `5000` |
 | `GEMINI_API_KEY` | Gemini API credential | secret; empty by default |
-| `GEMINI_MODEL` | Gemini model identifier | `gemini-2.5-flash-lite` |
+| `GEMINI_MODEL` | Gemini model identifier | `gemini-3.5-flash-lite` |
 | `AI_TIMEOUT_SECONDS` | AI generation time budget | `20` |
 | `AI_RATE_LIMIT_PER_HOUR` | AI requests per hour per process/client IP | `100` |
 

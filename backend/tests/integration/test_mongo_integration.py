@@ -25,7 +25,7 @@ def test_mongo_integration():
         ping_res = client.admin.command("ping")
         assert ping_res.get("ok") == 1.0
 
-        test_db = client[f"taskflow_ai_integration_test_{uuid4().hex}"]
+        test_db = client[f"tf_it_{uuid4().hex[:24]}"]
 
         created_indexes = ensure_indexes(test_db)
         assert len(created_indexes) == 3
@@ -37,6 +37,6 @@ def test_mongo_integration():
     finally:
         try:
             if test_db is not None:
-                client.drop_database(test_db.name)
+                test_db.drop_collection("tasks")
         finally:
             client.close()

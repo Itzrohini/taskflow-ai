@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from pymongo.errors import PyMongoError
 
+from app.core.errors import log_pymongo_error
 from app.db.mongo import get_database
 
 if TYPE_CHECKING:
@@ -28,7 +29,10 @@ def health_db_check(
     try:
         db.client.admin.command("ping")
     except (PyMongoError, OSError) as exc:
-        logger.warning("Database ping failed: %s", type(exc).__name__)
+        if isinstance(exc, PyMongoError):
+            log_pymongo_error("Database ping", exc)
+        else:
+            logger.warning("Database ping failed: %s", type(exc).__name__)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": "Database is unreachable"},

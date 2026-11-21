@@ -98,6 +98,69 @@ def test_gemini_provider_sends_sanitized_json_schema_and_minimal_thinking():
     assert config.thinking_config.thinking_budget == 0
     assert config.thinking_config.thinking_level is None
     assert config.max_output_tokens == 512
+    schema_keys = set()
+
+    def collect_keys(value):
+        if isinstance(value, dict):
+            schema_keys.update(value)
+            for nested in value.values():
+                collect_keys(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect_keys(nested)
+
+    collect_keys(config.response_json_schema)
+    assert {"minLength", "maxLength", "pattern"}.isdisjoint(schema_keys)
+
+
+def test_gemini_provider_retries_schema_rejection_in_plain_json_mode():
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content.side_effect = [
+        APIError(400, {"error": {"message": "schema unsupported"}}),
+        SimpleNamespace(text='{"description":"valid JSON fallback"}'),
+    ]
+    provider = GeminiProvider(create_settings(model="gemini-3.1-flash-lite"))
+    schema = {"type": "object", "properties": {"description": {"type": "string"}}}
+
+    with patch("app.ai.providers.gemini.genai.Client", return_value=client):
+        result = provider.generate_json(
+            "system",
+            "prompt",
+            timeout_s=2,
+            schema=schema,
+            minimize_thinking=True,
+            max_output_tokens=512,
+        )
+
+    assert result == '{"description":"valid JSON fallback"}'
+    assert client.models.generate_content.call_count == 2
+    first_config = client.models.generate_content.call_args_list[0].kwargs["config"]
+    retry_config = client.models.generate_content.call_args_list[1].kwargs["config"]
+    assert first_config.response_json_schema == schema
+    assert retry_config.response_json_schema is None
+    assert retry_config.response_mime_type == "application/json"
+    assert retry_config.system_instruction == "system"
+    assert retry_config.temperature == 0.2
+    assert retry_config.max_output_tokens == 512
+    assert retry_config.thinking_config.thinking_level.value == "MINIMAL"
+
+
+def test_gemini_provider_logs_and_reraises_unexpected_type_error(caplog):
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content.side_effect = TypeError("invalid SDK argument")
+    provider = GeminiProvider(create_settings())
+
+    with (
+        patch("app.ai.providers.gemini.genai.Client", return_value=client),
+        caplog.at_level("ERROR", logger="app.ai.providers.gemini"),
+        pytest.raises(TypeError, match="invalid SDK argument"),
+    ):
+        provider.generate_json("system", "prompt", timeout_s=2)
+
+    assert "Unexpected Gemini client failure (TypeError)" in caplog.text
+    assert "Traceback" in caplog.text
 
 
 def test_gemini_3_uses_only_minimal_thinking_level():
@@ -177,7 +240,7 @@ def test_gemini_api_error_logs_status_without_provider_details(caplog):
     with (
         patch("app.ai.providers.gemini.genai.Client", return_value=client),
         caplog.at_level("WARNING", logger="app.ai.providers.gemini"),
-        pytest.raises(AIProviderError),
+        pytest.raises(AIProviderError) as raised,
     ):
         provider.generate_json("system", "prompt", timeout_s=2)
 
@@ -185,3 +248,4 @@ def test_gemini_api_error_logs_status_without_provider_details(caplog):
     assert "NOT_FOUND" in caplog.text
     assert "private provider message" not in caplog.text
     assert "unit-test-key" not in caplog.text
+    assert raised.value.retryable is False

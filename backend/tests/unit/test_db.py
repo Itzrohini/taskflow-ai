@@ -1,11 +1,13 @@
 import mongomock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pymongo.errors import ConfigurationError, PyMongoError, ServerSelectionTimeoutError
 
 from app.core.config import Settings, get_settings
 from app.core.errors import (
     DatabaseUnavailableError,
     database_unavailable_exception_handler,
+    pymongo_exception_handler,
 )
 from app.db.indexes import ensure_indexes
 from app.main import create_app
@@ -34,7 +36,7 @@ def test_settings_load_without_env(monkeypatch):
     assert settings.MONGODB_DB_NAME == "taskflow"
     assert settings.MONGODB_TIMEOUT_MS == 5000
     assert settings.GEMINI_API_KEY == ""
-    assert settings.GEMINI_MODEL == "gemini-2.5-flash-lite"
+    assert settings.GEMINI_MODEL == "gemini-3.5-flash-lite"
     assert settings.AI_TIMEOUT_SECONDS == 20
     assert settings.AI_RATE_LIMIT_PER_HOUR == 100
 
@@ -116,6 +118,87 @@ def test_database_unavailable_error_handler():
         response = test_client.get("/trigger-db-error")
         assert response.status_code == 503
         assert response.json() == {"detail": "Database is unavailable"}
+
+
+def test_pymongo_error_handler_logs_safe_connection_diagnostics(caplog):
+    test_app = FastAPI()
+    test_app.add_exception_handler(PyMongoError, pymongo_exception_handler)
+
+    @test_app.get("/trigger-pymongo-error")
+    def trigger_pymongo_error():
+        raise ServerSelectionTimeoutError(
+            "SSL handshake failed; "
+            "mongodb+srv://test-user:test-password@example.mongodb.net/taskflow"
+        )
+
+    with (
+        TestClient(test_app) as test_client,
+        caplog.at_level("WARNING", logger="app.core.errors"),
+    ):
+        response = test_client.get("/trigger-pymongo-error")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database is unavailable"}
+    assert "SSL handshake failed" in caplog.text
+    assert "REDACTED_MONGODB_URI" in caplog.text
+    assert "test-user" not in caplog.text
+    assert "test-password" not in caplog.text
+
+
+def test_unreachable_database_does_not_prevent_app_startup(monkeypatch, caplog):
+    class FakeClient:
+        def __getitem__(self, _name):
+            return object()
+
+        def close(self):
+            pass
+
+    def fail_indexes(_db):
+        raise ServerSelectionTimeoutError("SSL handshake failed")
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(
+        "app.main.get_settings",
+        lambda: Settings(_env_file=None, MONGODB_URI="mongodb://example.invalid"),
+    )
+    monkeypatch.setattr("app.main.create_client", lambda _settings: fake_client)
+    monkeypatch.setattr("app.main.ensure_indexes", fail_indexes)
+    app = create_app()
+
+    with (
+        TestClient(app) as test_client,
+        caplog.at_level("WARNING", logger="app.core.errors"),
+    ):
+        response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert "SSL handshake failed" in caplog.text
+
+
+def test_mongo_configuration_error_is_redacted_and_app_starts(monkeypatch, caplog):
+    def fail_client(_settings):
+        raise ConfigurationError(
+            "Invalid URI mongodb+srv://test-user:test-password@example.mongodb.net"
+        )
+
+    monkeypatch.setattr(
+        "app.main.get_settings",
+        lambda: Settings(_env_file=None, MONGODB_URI="invalid"),
+    )
+    monkeypatch.setattr("app.main.create_client", fail_client)
+    app = create_app()
+
+    with (
+        TestClient(app) as test_client,
+        caplog.at_level("WARNING", logger="app.core.errors"),
+    ):
+        response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert "Invalid URI" in caplog.text
+    assert "REDACTED_MONGODB_URI" in caplog.text
+    assert "test-user" not in caplog.text
+    assert "test-password" not in caplog.text
 
 
 def test_task_service_accepts_fake_store():

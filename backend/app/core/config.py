@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     MONGODB_DB_NAME: str = "taskflow"
     MONGODB_TIMEOUT_MS: int = 5000
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash-lite"
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
     AI_TIMEOUT_SECONDS: int = 20
     AI_RATE_LIMIT_PER_HOUR: int = 100
 

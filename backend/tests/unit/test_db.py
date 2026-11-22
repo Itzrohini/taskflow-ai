@@ -126,6 +126,23 @@ def test_vercel_origin_passes_cors_preflight(monkeypatch):
     )
 
 
+def test_vercel_preview_origin_passes_cors_preflight():
+    app = create_app()
+    with TestClient(app) as test_client:
+        response = test_client.options(
+            "/api/v1/tasks/",
+            headers={
+                "Origin": "https://taskflow-ai-frontend-git-main-example.vercel.app",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == (
+        "https://taskflow-ai-frontend-git-main-example.vercel.app"
+    )
+
+
 def test_database_unavailable_error_handler():
     test_app = FastAPI()
     test_app.add_exception_handler(
